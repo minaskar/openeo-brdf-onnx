@@ -29,11 +29,20 @@ Output channels are the corrected reflectance for B02 B03 B04 B8A B11 B12, in th
 
 ## Usage
 
+A runnable example is provided in [`example_predict_onnx.ipynb`](example_predict_onnx.ipynb).
+It loads Sentinel-2 L2A, builds the 11th `theta_s` channel, runs the model and
+downloads the result.
+
+The short version:
+
 ```python
 nbar = cube_11.process("predict_onnx",
                        data=cube_11,
                        model="https://raw.githubusercontent.com/minaskar/openeo-brdf-onnx/main/roy_brdf.onnx")
 ```
+
+Note the explicit `data=cube_11`: the generic `DataCube.process()` does not wire the
+cube in as `data` the way helpers such as `apply_dimension` do.
 
 ## Notes
 
