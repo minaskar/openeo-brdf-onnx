@@ -58,12 +58,17 @@ ROY_COEF = {
 CLIP_FACTOR = 0.2  # sen2like clamps the correction to +/-20%
 D2R = np.pi / 180.0
 
+# The backend delivers SENTINEL2_L2A tiles as float64, and predict_onnx requires the
+# model input dtype to equal the tile celltype (see onnx/package.scala `reshape`), so
+# float64 is the compatible default here. float32 also works locally.
+DEFAULT_DTYPE = np.dtype(np.float64)
 
-def _const(name, value):
-    return numpy_helper.from_array(np.asarray(value, dtype=np.float32), name=name)
+
+def _const(name, value, dtype=None):
+    return numpy_helper.from_array(np.asarray(value, dtype=dtype or DEFAULT_DTYPE), name=name)
 
 
-def build_model(height, width, opset=17):
+def build_model(height, width, opset=17, dtype=None):
     """Build the ONNX graph. Returns an onnx.ModelProto.
 
     The graph is a literal transliteration of roy_brdf.py:
@@ -71,7 +76,18 @@ def build_model(height, width, opset=17):
         kgeo_li_sparse / kvol_ross_thick  -> kernel subgraphs
         c_factor                          -> ratio
         nbar                              -> clip + nodata Where
+
+    `dtype` must match the celltype of the data cube on the backend, otherwise
+    predict_onnx raises "onnx type ... does not match celltype ...".
+
+    Note on dtypes: the backend delivers SENTINEL2_L2A tiles as float64, but many
+    ONNX Runtime builds (including the one available here) implement `Tan`, `Atan`
+    and `Acos` only for float32. So the model takes and returns float64 (to match
+    the tile celltype) and casts to float32 internally for the trigonometry.
     """
+    io_dtype = np.dtype(dtype or DEFAULT_DTYPE)
+    onnx_dtype = TensorProto.DOUBLE if io_dtype == np.float64 else TensorProto.FLOAT
+    dtype = np.dtype(np.float32)  # internal compute dtype
     nodes = []
     inits = []
 
@@ -80,7 +96,7 @@ def build_model(height, width, opset=17):
         return name
 
     def add_const(name, value):
-        inits.append(_const(name, value))
+        inits.append(_const(name, value, dtype))
         return name
 
     def add_const_i64(name, value):
@@ -88,6 +104,13 @@ def build_model(height, width, opset=17):
         return name
 
     # ---------------------------------------------------------------- constants
+    # Cast the input to the internal compute dtype. `src` is the tensor name all
+    # math reads from; when I/O is already float32 this is a no-op alias.
+    if io_dtype == np.float64:
+        src = add("input_f32", "Cast", ["input"], to=TensorProto.FLOAT)
+    else:
+        src = "input"
+
     d2r = add_const("d2r", D2R)
     const_1 = add_const("const_1", 1.0)
     const_2 = add_const("const_2", 2.0)
@@ -107,16 +130,16 @@ def build_model(height, width, opset=17):
     angle_ch = {}
     for i, name in enumerate(BAND_ORDER):
         idx = add_const_i64(f"idx_band_{i}", [i])
-        g = add(f"gather_band_{name}", "Gather", ["input", idx], axis=0)
+        g = add(f"gather_band_{name}", "Gather", [src, idx], axis=0)
         band_ch[name] = add(f"chan_band_{name}", "Squeeze", [g, add_const_i64(f"ax0_band_{i}", [0])])
     for i, name in enumerate(ANGLE_ORDER):
         j = len(BAND_ORDER) + i
         idx = add_const_i64(f"idx_angle_{i}", [j])
-        g = add(f"gather_angle_{name}", "Gather", ["input", idx], axis=0)
+        g = add(f"gather_angle_{name}", "Gather", [src, idx], axis=0)
         angle_ch[name] = add(f"chan_angle_{name}", "Squeeze", [g, add_const_i64(f"ax0_angle_{i}", [0])])
     idx_theta = add_const_i64("idx_theta", [len(BAND_ORDER) + len(ANGLE_ORDER)])
     theta = add("chan_theta", "Squeeze",
-                [add("gather_theta", "Gather", ["input", idx_theta], axis=0),
+                [add("gather_theta", "Gather", [src, idx_theta], axis=0),
                  add_const_i64("ax0_theta", [0])])
 
     sza = angle_ch["sunZenithAngles"]
@@ -276,11 +299,17 @@ def build_model(height, width, opset=17):
     for i, band in enumerate(BAND_ORDER):
         ax = add_const_i64(f"ax0_out_{i}", [0])
         unsq.append(add(f"out_{band}", "Unsqueeze", [f"masked_{band}", ax]))
-    final = add("output", "Concat", unsq, axis=0)
+    final = add("output_f32", "Concat", unsq, axis=0)
+    # Cast back to the I/O dtype so output type matches input type (predict_onnx
+    # requires input type == output type, and it must equal the tile celltype).
+    if io_dtype == np.float64:
+        final = add("output", "Cast", [final], to=TensorProto.DOUBLE)
+    else:
+        final = add("output", "Identity", [final])
 
     # --------------------------------------------------------------- assemble
-    inp = helper.make_tensor_value_info("input", TensorProto.FLOAT, [N_INPUT_CHANNELS, height, width])
-    out = helper.make_tensor_value_info("output", TensorProto.FLOAT, [N_OUTPUT_CHANNELS, height, width])
+    inp = helper.make_tensor_value_info("input", onnx_dtype, [N_INPUT_CHANNELS, height, width])
+    out = helper.make_tensor_value_info("output", onnx_dtype, [N_OUTPUT_CHANNELS, height, width])
     graph = helper.make_graph(nodes, "roy_brdf_cfactor", [inp], [out], initializer=inits)
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", opset)])
     model.ir_version = 10  # keep within onnxruntime 1.16-compatible range
