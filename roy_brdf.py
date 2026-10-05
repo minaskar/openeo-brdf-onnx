@@ -83,7 +83,12 @@ def kgeo_li_sparse(sza_deg, vza_deg, dphi_deg):
 
 
 def kvol_ross_thick(sza_deg, vza_deg, dphi_deg):
-    """Ross-Thick volumetric kernel (MODIS ATBD 1999, eq. as implemented in sen2like)."""
+    """Ross-Thick volumetric kernel, as implemented in sen2like.
+
+    Uses Roujean's scaling 4/(3*pi)*(...) - 1/3, i.e. the MODIS form (Lucht et al. 2000,
+    eq. 38: (...) - pi/4) times 4/(3*pi). The Roy coefficients come from MODIS, so this
+    gives a ~1-2% weaker correction than the published method; kept to match sen2like.
+    """
     theta_s = np.asarray(sza_deg, dtype=np.float64) * D2R
     theta_v = np.asarray(vza_deg, dtype=np.float64) * D2R
     phi = np.asarray(dphi_deg, dtype=np.float64) * D2R
