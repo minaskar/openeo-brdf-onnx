@@ -27,6 +27,7 @@ choices):
 - Fixed spatial dims H x W: the backend retiles the cube to the model's literal shape[-2:].
 - The +/-20% clamp has per-pixel bounds, so it must be Max/Min, not Clip (ONNX Clip takes
   only scalar min/max.
+- Opset 21 (as emitted by ndonnx) requires ONNX Runtime >= 1.18.
 
 Why this may be the best of the four
 ------------------------------------
@@ -199,33 +200,14 @@ def build(height: int = 32, width: int = 32) -> onnx.ModelProto:
     return ndx.build({"x": x}, {"output": out})
 
 
-def export(path: str = "roy_brdf_ndonnx.onnx", height: int = 32, width: int = 32,
-           opset: int = 17, ir_version: int = 10) -> str:
-    """Build and save, pinning opset/IR for the backend's ONNX Runtime.
+def export(path: str = "roy_brdf_ndonnx.onnx", height: int = 32, width: int = 32) -> str:
+    """Build, validate and save the model as emitted by ndonnx (opset 21, IR 8).
 
-    Two ndonnx-specific fixups are needed before the graph validates at opset 17:
-
-    1. ndonnx emits opset 21, whose `Cast` carries a `saturate` attribute (introduced in
-       opset 19 for float8 conversions). Opset 17's schema rejects it
-       ("Unrecognized attribute: saturate"), so it is removed. It has no effect on the
-       float64 <-> float32 casts used here.
-    2. Some ops are emitted at a newer opset than 17 supports in older runtimes; the
-       checker validates the result, which is the guard that catches this.
+    No opset/IR downgrade is applied: opset 21 needs ONNX Runtime >= 1.18, which the
+    openEO backend satisfies (verified with a predict_onnx job; output identical to an
+    opset-17 build).
     """
     model = build(height, width)
-
-    for node in model.graph.node:
-        if node.op_type == "Cast":
-            kept = [a for a in node.attribute if a.name != "saturate"]
-            del node.attribute[:]
-            node.attribute.extend(kept)
-
-    for op_import in model.opset_import:
-        if op_import.domain == "" and op_import.version != opset:
-            op_import.version = opset
-
-    if model.ir_version > ir_version:
-        model.ir_version = ir_version
     onnx.checker.check_model(model)
     onnx.save(model, path)
     return path

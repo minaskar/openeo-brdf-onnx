@@ -27,6 +27,20 @@ Output channels are the corrected reflectance for B02 B03 B04 B8A B11 B12, in th
 
 `brdf_onnx_model.py` builds the model (`build_model(height, width)`).
 
+## Alternative builds
+
+The same model authored three other ways, for readability and cross-validation.
+Each script exports its `.onnx` and verifies it against `roy_brdf.py` (numpy reference):
+
+| script | output | run |
+|--------|--------|-----|
+| `brdf_onnx_torch.py` | `roy_brdf_torch.onnx` | `uv run --no-project --with torch --with onnx --with onnxruntime --with xarray python brdf_onnx_torch.py` |
+| `brdf_onnx_script.py` | `roy_brdf_onnxscript.onnx` | `uv run --no-project --with onnxscript --with onnxruntime --with xarray python brdf_onnx_script.py` |
+| `brdf_onnx_ndonnx.py` | `roy_brdf_ndonnx.onnx` | `uv run --no-project --with ndonnx --with onnxruntime --with xarray python brdf_onnx_ndonnx.py` |
+
+`roy_brdf_ndonnx.onnx` uses opset 21 and needs ONNX Runtime >= 1.18 (the openEO backend
+satisfies this). The other models use opset 17.
+
 ## Usage
 
 A runnable example is provided in [`example_predict_onnx.ipynb`](example_predict_onnx.ipynb).
