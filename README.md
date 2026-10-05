@@ -63,3 +63,7 @@ cube in as `data` the way helpers such as `apply_dimension` do.
 - Band order is positional; reordering silently corrupts results.
 - `theta_s` is an input channel because `predict_onnx` has no `context` parameter.
 - Non-Roy bands (no MODIS analogue) are not covered.
+
+## License
+
+[Apache-2.0](LICENSE)
